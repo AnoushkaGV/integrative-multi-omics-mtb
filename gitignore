@@ -1,0 +1,29 @@
+# Raw and intermediate data — not tracked (see README > Data availability)
+data/
+output/
+metadata/
+
+# Common large/raw bioinformatics file types, in case they end up elsewhere
+*.CEL
+*.CEL.gz
+*_counts.txt
+*.bam
+*.bai
+*.fastq
+*.fastq.gz
+*.fq.gz
+*.tRFs.report.tsv
+
+# R
+.Rhistory
+.RData
+.Rproj.user/
+*.Rproj
+
+# macOS / editor cruft
+.DS_Store
+*.swp
+
+# Keep tracked results even though output/ is ignored above
+!results/
+!results/**
