@@ -1,5 +1,4 @@
-# Raw and intermediate data — not tracked, except results kept in
-# data/CIBERSORTx_tables/ (see README > results/CIBERSORTx_tables)
+# data/CIBERSORTx_tables/
 data/*
 !data/CIBERSORTx_tables/
 !data/CIBERSORTx_tables/**

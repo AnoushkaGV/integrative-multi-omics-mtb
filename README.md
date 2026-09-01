@@ -17,6 +17,7 @@ Analysis code for the whole blood multi-omics study conducted to understand host
 │   └── 06_predictions.R     EARLY5 signature score, ROC comparison with RISK6 and DIAG3
 ├── data/
 │   ├── CIBERSORTx_tables/   CIBERSORTx inputs and outputs
+│   ├── rna_immune_cell.tsv  Immune cell transcript expression from the Human Protein Atlas
 └── README.md
 ```
 
@@ -44,6 +45,7 @@ The exact input and output files from CIBERSORTx runs for GSE89403 and the study
 | GSE341867 | Study cohort — miRNA, mRNA, tRF-seq | Public — GEO |
 | CIBERSORTx results | Immune cell deconvolution | Generated via the [CIBERSORTx portal](https://cibersortx.stanford.edu/); inputs/outputs provided in `data/CIBERSORTx_tables/` |
 
+For additional information on data, metadata, or the analysis code, please contact g.v.anoushka@gmail.com.
 ## License
 
 MIT — see `LICENSE`.
