@@ -1,84 +1,49 @@
-# [Paper Title Here]
+# Blood Based Multi-Omics during early TB Treatment Response
 
-Analysis code accompanying: [Author list]. "[Paper title]." *[Journal]*, [year]. [DOI/link when available]
+Analysis code for the whole blood multi-omics study conducted to understand host responses during TB infections and therapy. We have characterized mRNAs, miRNAs and tRFs changing after 4 weeks of standard anti-tuberculous therapy. We have proposed EARLY5 as a candidate gene-pair signature for predicting sputum culture conversion at the 4 week timepoint.
 
-This repository contains the R scripts used to generate the miRNA, mRNA, and tRF
-results and figures reported in the manuscript. Raw sequencing data are not
-hosted here (see **Data availability** below) — this repo is scripts + small
-derived summary tables only.
+**Authors:** G V Anoushka Chinmayi, Darla Quijada, Artur T L Queiroz, Neil Martinson, Bruno B. Andrade, Marc K. Halushka, Joel S. Bader, Petros C. Karakousis
 
 ## Repository structure
 
 ```
 .
 ├── scripts/
-│   ├── 01_mirna.R          # miRNA DESeq2 DE analysis, heatmap, volcano, multiMiR target mapping
-│   ├── 02_cibersort.R      # CIBERSORTx / MCPcounter immune deconvolution, paired baseline-vs-week4 comparison
-│   ├── 03_meta_mrna.R      # mRNA meta-analysis across GSE89403, GSE31348, and the study cohort
-│   ├── 04_trfs.R           # tRF-level DESeq2 differential expression and annotation
-│   └── 05_predictions.R    # k-TSP / elastic-net classifier for sputum culture conversion, ROC validation
-├── results/                # small derived tables (DEG lists, top tables) — see below
-├── docs/
+│   ├── 01_mirna.R           miRNA DESeq2 differential expression analysis, multiMiR target mapping (GSE341867)
+│   ├── 02_cibersort.R       CIBERSORTx / MCPcounter immune deconvolution, paired baseline-vs-week4 comparison
+│   ├── 03_meta_mrna.R       mRNA meta-analysis across GSE89403, GSE31348, and the study cohort (GSE341867)
+│   ├── 04_trfs.R            tRF-level DESeq2 differential expression and annotation (GSE341867)
+│   └── 05_predictions.R     k-TSP classifier for sputum culture conversion (LOOCV, clinical validation)
+│   └── 06_predictions.R     EARLY5 signature score, ROC comparison with RISK6 and DIAG3
+├── data/
+│   ├── CIBERSORTx_tables/   CIBERSORTx inputs and outputs
 └── README.md
 ```
 
-Each script expects a local `data/` directory (not tracked in this repo — see
-`.gitignore`) laid out as:
+## Requirements and setup
 
-```
-data/
-├── mirna/
-│   └── counts_paired.csv
-├── mrna/
-│   ├── gse89403/
-│   │   ├── counts/                  # per-sample featureCounts output
-│   │   └── cibersort/
-│   ├── gse31348/
-│   │   └── GSE31348/CEL/            # raw CEL files, fetched via GEOquery
-│   └── study_cohort/
-│       ├── counts_paired/
-│       └── cibersort/
-├── trf_counts.csv
-└── trfs/                            # per-sample tRF report .tsv files
-```
+For raw sequencing-derived inputs (count matrices, CEL files, tRF reports) see **Data availability** below.
 
-and writes intermediate/output tables to `output/meta/tables/` (also not
-tracked).
+## CIBERSORTx data
 
-## Pipeline order
+The exact input and output files from CIBERSORTx runs for GSE89403 and the study cohort are included below.
 
-Run scripts in the numbered order above. `03_meta_mrna.R` and `01_mirna.R`
-both read tables written by earlier steps (`output/meta/tables/*.tsv`,
-`output/meta/tables/meta_degs.csv`) — see the header comments in each script
-for its specific inputs.
+| File | Dataset | Contents |
+|---|---|---|
+| `CIBERSORTx_GSE89403_results.csv` | GSE89403 | CIBERSORTx deconvolution output |
+| `cibersortx_GSE89403_input.tsv` | GSE89403 | Input TPM mixture matrix|
+| `CIBERSORTx_study_cohort_results.csv` | Study cohort | CIBERSORTx deconvolution output |
+| `cibersortx_study_cohort_input.tsv` | Study cohort | Input TPM mixture matrix |
 
 ## Data availability
 
-- **GSE89403** (mRNA, RNA-seq) — publicly available on GEO, fetched directly
-  in `03_meta_mrna.R` via `GEOquery`/SRA.
-- **GSE31348** (mRNA, microarray) — publicly available on GEO, fetched
-  directly in `03_meta_mrna.R` via `GEOquery`.
-- **Study cohort** (miRNA, mRNA, tRF-seq) — deposited on GEO under accession
-  [**GSE341867**](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE341867).
-- **CIBERSORTx** results were generated via the CIBERSORTx web portal
-  (https://cibersortx.stanford.edu/), which is not open-source and cannot be
-  run as part of this pipeline; input mixture files and output fraction
-  tables are described in the Methods.
-
-## Software
-
-Developed and run under R [fill in version, e.g. 4.3.x]. Key packages:
-DESeq2, limma, edgeR, switchBox, ComplexHeatmap, multiMiR, MCPcounter, pROC,
-glmnet, biomaRt, GEOquery, oligo, ggplot2. A full `sessionInfo()` dump can be
-added here once finalized — consider committing one as `docs/sessionInfo.txt`
-for exact reproducibility.
-
-## Citation
-
-If you use this code, please cite:
-
-> [Full citation once available]
+| Dataset | Type | Access |
+|---|---|---|
+| GSE89403 | mRNA, RNA-seq | Public — GEO (fetched in `03_meta_mrna.R` via `GEOquery`/SRA) |
+| GSE31348 | mRNA, microarray | Public — GEO (fetched in `03_meta_mrna.R` via `GEOquery`) |
+| GSE341867 | Study cohort — miRNA, mRNA, tRF-seq | Public — GEO |
+| CIBERSORTx results | Immune cell deconvolution | Generated via the [CIBERSORTx portal](https://cibersortx.stanford.edu/); inputs/outputs provided in `data/CIBERSORTx_tables/` |
 
 ## License
 
-Released under the MIT License — see `LICENSE`.
+MIT — see `LICENSE`.

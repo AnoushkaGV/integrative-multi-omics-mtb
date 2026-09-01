@@ -5,8 +5,8 @@ library(MCPcounter)
 COL_BASELINE <- "#D4A96A"
 COL_WEEK4    <- "tomato3"
 
-cib_gse  <- read.csv("data/mrna/gse89403/cibersort/CIBERSORTx_Job8_Results.csv", check.names=FALSE)
-tpm_gse2 <- read.delim("data/mrna/gse89403/cibersort/cibersortx_input_final.tsv", check.names=FALSE)
+cib_gse  <- read.csv("data/mrna/gse89403/cibersort/CIBERSORTx_GSE89403_results.csv", check.names=FALSE)
+tpm_gse2 <- read.delim("data/mrna/gse89403/cibersort/cibersortx_GSE89403_input.tsv", check.names=FALSE)
 
 cib_gse$Timepoint <- ifelse(grepl("DX", cib_gse$Mixture), "Baseline", "Week4")
 cib_gse$PairID    <- sub("_(DX|week_4)$", "", cib_gse$Mixture)
