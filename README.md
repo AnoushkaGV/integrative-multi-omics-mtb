@@ -46,6 +46,3 @@ The exact input and output files from CIBERSORTx runs for GSE89403 and the study
 | CIBERSORTx results | Immune cell deconvolution | Generated via the [CIBERSORTx portal](https://cibersortx.stanford.edu/); inputs/outputs provided in `data/CIBERSORTx_tables/` |
 
 For additional information on data, metadata, or the analysis code, please contact g.v.anoushka@gmail.com.
-## License
-
-MIT — see `LICENSE`.
