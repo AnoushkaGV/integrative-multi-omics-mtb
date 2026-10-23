@@ -2,9 +2,7 @@
 
 Analysis code for:
 
-> Chinmayi GVA, Quijada D, Queiroz ATL, Martinson N, Andrade BB, Halushka MK, Bader JS, Karakousis PC. *Blood mRNA and small RNA remodeling during early tuberculosis treatment and a baseline signature of culture conversion.* (manuscript under review)
-
-We profiled paired whole-blood samples collected at baseline and after four weeks of standard anti-tuberculosis therapy across three South African cohorts. The analysis combines an mRNA meta-analysis (GSE89403 and a prospective cohort, with validation in GSE31348), immune cell deconvolution, and miRNA and tRNA-derived fragment (tRF) profiling of the prospective cohort. A baseline k-top scoring pairs signature, EARLY5, was developed in GSE89403 to predict sputum culture conversion by week 4.
+> Chinmayi GVA, Quijada D, Queiroz ATL, Martinson N, Andrade BB, Halushka MK, Bader JS, Karakousis PC. *Blood mRNA and small RNA remodeling during early tuberculosis treatment and a baseline signature of culture conversion.*
 
 ## Repository structure
 
