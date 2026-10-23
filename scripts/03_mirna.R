@@ -1,3 +1,8 @@
+# =============================================================================
+# miRNA analysis (Figure 4a-c, Supplementary Tables S2-S3)
+# Paired DESeq2 (~ subject + condition) with apeglm shrinkage, and multiMiR
+# targets among the meta-DEGs. Run meta_final.R first.
+# =============================================================================
 library(DESeq2)
 library(ggplot2)
 library(ggrepel)
@@ -6,6 +11,15 @@ library(ComplexHeatmap)
 library(circlize)
 library(multiMiR)
 
+out_dir <- "output_revised/mirna/tables"
+dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
+fig_dir <- "output_revised/mirna/figures"
+dir.create(fig_dir, recursive = TRUE, showWarnings = FALSE)
+# Inputs from the meta-analysis
+meta_degs_file <- "output_revised/meta/tables/meta_degs.csv"
+study_tab_file <- "output_revised/meta/tables/study_cohort_toptab.tsv"
+stopifnot(file.exists(meta_degs_file), file.exists(study_tab_file))
+
 COL_BASELINE <- "#D4A96A"
 COL_WEEK4    <- "tomato3"
 COL_UP       <- "#C1121F"
@@ -13,20 +27,24 @@ COL_DOWN     <- "#1D4E89"
 COL_NS       <- "#ADB5BD"
 
 # ── DESeq2 ────────────────────────────────────────────────────────────────────
-miRNA_counts <- read.table("data/mirna/counts_paired.csv", header=T, sep=",")
+# The file starts with a byte-order mark
+miRNA_counts <- read.table("data/mirna/counts_paired.csv", header=T, sep=",", fileEncoding="UTF-8-BOM")
+stopifnot("Feature" %in% colnames(miRNA_counts))
 rownames(miRNA_counts) <- miRNA_counts$Feature
 miRNA_counts$Feature   <- NULL
 
-#Annotate data - baseline and treatment
-condition <- c(rep("baseline", 11), rep("treatment", 11))
-subject   <- gsub("X(\\d+)_.*", "\\1", colnames(miRNA_counts))
+# Timepoint and subject from the column names
+condition <- sub("^X?\\d+_", "", colnames(miRNA_counts))
+subject   <- sub("^X?(\\d+)_.*", "\\1", colnames(miRNA_counts))
+stopifnot(all(condition %in% c("baseline", "treatment")),
+          sum(condition == "baseline") == 11, sum(condition == "treatment") == 11,
+          all(table(subject) == 2))
 col_data  <- data.frame(subject=subject, condition=condition)
 
 dds <- DESeqDataSetFromMatrix(countData=miRNA_counts, colData=col_data,
                               design=~subject + condition)
 dds <- DESeq(dds)
 
-#lfcShrink - To account for low miRNA counts
 res_shrunk <- as.data.frame(lfcShrink(dds,
                                       coef="condition_treatment_vs_baseline", type="apeglm"))
 res_shrunk <- res_shrunk[complete.cases(res_shrunk) & res_shrunk$baseMean > 50, ]
@@ -36,8 +54,8 @@ res_shrunk$sig <- ifelse(res_shrunk$log2FoldChange > 0  & res_shrunk$padj < 0.05
 deg_list   <- res_shrunk[abs(res_shrunk$log2FoldChange) > 0.58 & res_shrunk$padj < 0.05, ]
 sig_mirnas <- rownames(deg_list)
 
-meta_degs <- read.csv("output/meta/tables/meta_degs.csv")
-study_tab <- read.delim("output/meta/tables/study_cohort_toptab.tsv", sep="\t")
+meta_degs <- read.csv(meta_degs_file)
+study_tab <- read.delim(study_tab_file, sep="\t")
 
 # ── Panel A: ComplexHeatmap ───────────────────────────────────────────────────
 vsd     <- varianceStabilizingTransformation(dds, blind=FALSE)
@@ -82,6 +100,9 @@ ht <- Heatmap(heat_mat,
               border = FALSE)
 
 draw(ht, merge_legend=TRUE)
+# Save Figure 4a
+pdf(file.path(fig_dir, "Fig4a_heatmap.pdf"), width = 8, height = 4); draw(ht, merge_legend=TRUE); dev.off()
+png(file.path(fig_dir, "Fig4a_heatmap.png"), width = 8, height = 4, units = "in", res = 300); draw(ht, merge_legend=TRUE); dev.off()
 
 # ── Panel B: Volcano (tRF style) ─────────────────────────────────────────────
 res_df_plot       <- res_shrunk
@@ -110,6 +131,8 @@ pVolc <- ggplot(res_df_plot, aes(x=log2FoldChange, y=-log10(padj))) +
         panel.background = element_rect(fill="white"))
 
 print(pVolc)
+ggsave(file.path(fig_dir, "Fig4b_volcano.pdf"), pVolc, width = 6, height = 5)
+ggsave(file.path(fig_dir, "Fig4b_volcano.png"), pVolc, width = 6, height = 5, dpi = 300)
 
 # ── multiMiR targets ──────────────────────────────────────────────────────────
 targets_pred <- get_multimir(mirna=sig_mirnas, table="predicted", summary=FALSE)
@@ -121,6 +144,15 @@ val_df           <- targets_val@data[, c("mature_mirna_id","target_symbol")]
 val_df$evidence  <- "Validated"
 
 targets_df <- rbind(pred_df, val_df)
+
+# Databases supporting each miRNA-target pair
+db_all <- rbind(targets_pred@data[, c("mature_mirna_id","target_symbol","database")],
+                targets_val@data[,  c("mature_mirna_id","target_symbol","database")])
+db_summary <- aggregate(database ~ mature_mirna_id + target_symbol, data = db_all,
+                        FUN = function(x) paste(sort(unique(x)), collapse = ";"))
+cat("Predicted-target databases queried:",
+    paste(sort(unique(targets_pred@data$database)), collapse = ", "), "\n")
+
 targets_df <- targets_df[order(targets_df$evidence == "Validated", decreasing=TRUE), ]
 targets_df <- targets_df[!duplicated(targets_df[, c("mature_mirna_id","target_symbol")]), ]
 
@@ -156,8 +188,10 @@ pTile <- ggplot(tile_df, aes(x=mirna_clean, y=target_symbol, fill=evidence_f)) +
         panel.border    = element_rect(color="black", fill=NA, linewidth=0.5))
 
 print(pTile)
+ggsave(file.path(fig_dir, "Fig4c_targets.pdf"), pTile, width = 6, height = 7)
+ggsave(file.path(fig_dir, "Fig4c_targets.png"), pTile, width = 6, height = 7, dpi = 300)
 
-# ── Panel D: Inverse correlation scatter ─────────────────────────────────────
+# ── miRNA-mRNA pairs ──────────────────────────────────────────────────────────
 mirna_lfc      <- data.frame(mature_mirna_id=rownames(deg_list),
                              mirna_lfc=deg_list$log2FoldChange)
 study_lfc      <- study_tab[, c("hgnc_symbol","logFC")]
@@ -174,48 +208,6 @@ inv_only <- inv_df[inv_df$inverse, ]
 
 cat(sprintf("Total pairs: %d | Inverse: %d (%.1f%%)\n",
             nrow(inv_df), nrow(inv_only), 100*nrow(inv_only)/nrow(inv_df)))
-
-sp       <- cor.test(inv_only$mirna_lfc, inv_only$mrna_lfc, method="spearman")
-sp_label <- sprintf("Spearman rho = %.2f\np = %.3f", sp$estimate, sp$p.value)
-
-mirna_levels <- unique(inv_only$mirna_clean)
-pastel_cols <- c(
-  "miR-139-5p"  = "#C9A87C",  # terracotta
-  "miR-144-3p"  = "#A8B5C9",  # slate blue
-  "miR-144-5p"  = "#B5A0B8",  # mauve
-  "miR-32-5p"   = "#7F9E9A",  # dusty teal
-  "miR-28-3p"   = "#C4A882",  # warm sand
-  "miR-4745-3p" = "#B8A99A"   # greige
-)
-
-inv_only_dedup <- inv_only[order(inv_only$evidence == "Validated", decreasing=TRUE), ]
-inv_only_dedup <- inv_only_dedup[!duplicated(inv_only_dedup$target_symbol), ]
-inv_only_dedup$label <- inv_only_dedup$target_symbol
-
-pScatter <- ggplot(inv_only_dedup, aes(x=mirna_lfc, y=mrna_lfc)) +
-  geom_hline(yintercept=0, linetype="dashed", color="grey50", linewidth=0.4) +
-  geom_vline(xintercept=0, linetype="dashed", color="grey50", linewidth=0.4) +
-  geom_point(aes(color=mirna_clean, shape=evidence, size=evidence, stroke=evidence)) +
-  geom_smooth(method="lm", se=TRUE, color="grey30", linewidth=0.6) +
-  geom_text_repel(aes(label=label), size=4, fontface="italic",
-                  na.rm=TRUE, segment.size=0.25, max.overlaps=20) +
-  annotate("text", x=Inf, y=Inf, label=sp_label,
-           hjust=1.1, vjust=1.5, size=4.5, fontface="italic", color="grey30") +
-  scale_color_manual(values=pastel_cols, name="miRNA") +
-  scale_shape_manual(values=c(Validated=16, Predicted=1), name="Evidence") +
-  scale_size_manual(values=c(Validated=4, Predicted=3.5), name="Evidence") +
-  scale_discrete_manual("stroke", values=c(Validated=0.5, Predicted=1.2), name="Evidence") +
-  labs(x=expression(miRNA~log[2]~Fold~Change),
-       y=expression(mRNA~log[2]~Fold~Change~(study~cohort))) +
-  theme_classic(base_size=14) +
-  theme(legend.position = "right",
-        panel.border    = element_rect(color="black", fill=NA, linewidth=0.5),
-        axis.title      = element_text(size=15),
-        axis.text       = element_text(size=13),
-        legend.text     = element_text(size=11),
-        legend.title    = element_text(size=12))
-
-print(pScatter)
 
 norm_counts          <- counts(dds, normalized=TRUE)
 log_counts           <- log2(norm_counts[sig_mirnas, , drop=FALSE] + 1)
@@ -243,8 +235,8 @@ pSlope <- ggplot(expr_long, aes(x=timepoint, y=expr, group=subject)) +
         panel.border     = element_rect(color="black", fill=NA, linewidth=0.5))
 
 print(pSlope)
-
-## save
+ggsave(file.path(fig_dir, "SuppFig_mirna_paired_slopes.pdf"), pSlope, width = 9, height = 5)
+ggsave(file.path(fig_dir, "SuppFig_mirna_paired_slopes.png"), pSlope, width = 9, height = 5, dpi = 300)
 
 # ── Write miRNA DE table ──────────────────────────────────────────────────────
 mirna_table <- res_shrunk
@@ -252,18 +244,28 @@ mirna_table$miRNA <- gsub("hsa-", "", rownames(mirna_table))
 mirna_table <- mirna_table[, c("miRNA", "baseMean", "log2FoldChange", "lfcSE", "pvalue", "padj", "sig")]
 mirna_table <- mirna_table[order(mirna_table$padj), ]
 
-write.csv(mirna_table, "output/mirna/tables/mirna_de_results.csv", row.names=FALSE)
+write.csv(mirna_table, file.path(out_dir, "mirna_de_results.csv"), row.names=FALSE)
 
 # ── Write miRNA-mRNA pairs table ──────────────────────────────────────────────
 pairs_table <- merge(targets_meta, mirna_lfc, by="mature_mirna_id")
 pairs_table <- merge(pairs_table, study_lfc, by.x="target_symbol", by.y="hgnc_symbol")
 pairs_table$inverse <- (pairs_table$mirna_lfc > 0 & pairs_table$mrna_lfc < 0) |
   (pairs_table$mirna_lfc < 0 & pairs_table$mrna_lfc > 0)
+# Add the meta-analysis log2FC
+pairs_table <- merge(pairs_table, meta_degs[, c("hgnc_symbol","logFC_meta")],
+                     by.x="target_symbol", by.y="hgnc_symbol")
+stopifnot(all(sign(pairs_table$mrna_lfc) == sign(pairs_table$logFC_meta)))
+# Supporting database(s) for each pair
+pairs_table <- merge(pairs_table, db_summary, by=c("mature_mirna_id","target_symbol"), all.x=TRUE)
 pairs_table$mirna_clean <- gsub("hsa-", "", pairs_table$mature_mirna_id)
-pairs_table <- pairs_table[, c("mirna_clean", "target_symbol", "evidence", 
-                               "mirna_lfc", "mrna_lfc", "inverse")]
-pairs_table <- pairs_table[order(pairs_table$evidence == "Validated", 
+pairs_table <- pairs_table[, c("mirna_clean", "target_symbol", "evidence", "database",
+                               "mirna_lfc", "mrna_lfc", "logFC_meta", "inverse")]
+colnames(pairs_table)[colnames(pairs_table) == "mrna_lfc"]   <- "mrna_lfc_study_cohort"
+colnames(pairs_table)[colnames(pairs_table) == "logFC_meta"] <- "mrna_lfc_meta"
+pairs_table <- pairs_table[order(pairs_table$evidence == "Validated",
                                  decreasing=TRUE), ]
-
-write.csv(pairs_table, "output/mirna/tables/mirna_mrna_pairs.csv", row.names=FALSE)
+pairs_table$inverse <- ifelse(pairs_table$inverse, "Yes", "No")
+cat(sprintf("Supp Table 3: %d pairs, %d validated, %d inverse\n", nrow(pairs_table),
+            sum(pairs_table$evidence == "Validated"), sum(pairs_table$inverse == "Yes")))
+write.csv(pairs_table, file.path(out_dir, "mirna_mrna_pairs.csv"), row.names=FALSE)
 

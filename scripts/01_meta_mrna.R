@@ -1,3 +1,9 @@
+# =============================================================================
+# mRNA meta-analysis (Figure 2a-c, Supplementary Table S1)
+# Paired limma-voom analysis of GSE89403 and the study cohort, Stouffer's
+# weighted Z-score meta-analysis, and validation in GSE31348 (paired limma,
+# binomial sign test).
+# =============================================================================
 library(limma)
 library(edgeR)
 library(data.table)
@@ -11,6 +17,12 @@ library(ggplotify)
 library(patchwork)
 library(GEOquery)
 library(oligo)
+library(org.Hs.eg.db)
+
+out_dir <- "output_revised/meta/tables"
+dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
+fig_dir <- "output_revised/meta/figures"
+dir.create(fig_dir, recursive = TRUE, showWarnings = FALSE)
 
 # =============================================================================
 # GSE31348
@@ -43,21 +55,34 @@ gene_expr <- gene_expr[,order(colnames(gene_expr))]
 gene_expr<- gene_expr[,colnames(gene_expr) %in% sample_metadata$ids]
 stopifnot(all.equal(colnames(gene_expr), sample_metadata$ids))
 
+# Paired design. Patient ID = sample title with the timepoint label removed;
+# every patient must appear exactly twice (once DX, once week 4).
+sample_metadata$subject <- trimws(gsub("[[:space:]_,-]*(diagnosis|week[[:space:]_-]*4)[[:space:]_,-]*",
+                                       " ", sample_metadata$titles, ignore.case = TRUE))
+print(head(sample_metadata[, c("titles", "subject", "condition")], 10))
+pair_tab <- table(sample_metadata$subject, sample_metadata$condition)
+print(table(rowSums(pair_tab)))
+if (!all(pair_tab == 1)) {
+  print(pair_tab[rowSums(pair_tab != 1) > 0, , drop = FALSE])
+  stop("Patient IDs could not be paired from titles -- adjust the gsub() pattern above")
+}
+cat(sprintf("GSE31348: %d paired patients\n", nrow(pair_tab)))
+
+subject_31348 <- factor(sample_metadata$subject)
 f <- factor(sample_metadata$condition, levels=c("DX", "Week4"))
-f <- relevel(f, ref = "DX")
-design <- model.matrix(~ f)
+design <- model.matrix(~ subject_31348 + f)
 fit <- lmFit(gene_expr, design)
 fit2 <- eBayes(fit)
 top_table= topTable(fit2, coef = "fWeek4", n=Inf, confint = T)
 affy<-as.data.frame(top_table)
 affy <- tibble::rownames_to_column(affy, "entrez_id")
-write.table(affy,"output/meta/tables/gse31348_toptab.tsv", sep = "\t", row.names = F, quote = F)
+write.table(affy,file.path(out_dir, "gse31348_toptab.tsv"), sep = "\t", row.names = F, quote = F)
 
-mart_affy <- useEnsembl(biomart = "genes", dataset = "hsapiens_gene_ensembl")
-entrez_map <- getBM(attributes = c("entrezgene_id", "hgnc_symbol"),
-                    filters = "entrezgene_id", values = affy$entrez_id, mart = mart_affy)
-affy$entrez_id <- as.integer(affy$entrez_id)
-affy$hgnc_symbol<- entrez_map$hgnc_symbol[match(affy$entrez_id, entrez_map$entrezgene_id)]
+# Entrez -> HGNC symbol mapping with org.Hs.eg.db. Multi-gene probes
+# ("a /// b") map to NA and are dropped.
+affy$hgnc_symbol <- AnnotationDbi::mapIds(org.Hs.eg.db, keys = as.character(affy$entrez_id),
+                                          column = "SYMBOL", keytype = "ENTREZID",
+                                          multiVals = "first")
 
 # =============================================================================
 # GSE89403
@@ -73,10 +98,9 @@ dat<- lapply(count_files, function(file){
 })
 
 stopifnot(all(sapply(dat[-1], function(df) all.equal(df$GeneID, dat[[1]]$GeneID))))
-mat<- Reduce(function(x,y) merge(x,y,by="GeneID", all=T), dat)
 mat <- do.call(cbind, lapply(dat, function(df) df[, -1]))
 mat<- as.data.frame(mat)
-mat<-mat[,order(as.numeric(colnames(mat)))]
+mat<-mat[,order(suppressWarnings(as.numeric(colnames(mat))))]
 rownames(mat)<- dat[[1]]$GeneID
 colnames(mat) <- gsub(".*/(SRR[0-9]+)\\.bam", "\\1", colnames(mat))
 
@@ -122,15 +146,16 @@ dat<- lapply(count_files, function(file){
 })
 
 stopifnot(all(sapply(dat[-1], function(df) all.equal(df$GeneID, dat[[1]]$GeneID))))
-mat<- Reduce(function(x,y) merge(x,y,by="GeneID", all=T), dat)
 mat <- do.call(cbind, lapply(dat, function(df) df[, -1]))
 mat<- as.data.frame(mat)
-mat<-mat[,order(as.numeric(colnames(mat)))]
+mat<-mat[,order(suppressWarnings(as.numeric(colnames(mat))))]
 rownames(mat)<- dat[[1]]$GeneID
 
 sample_names<- colnames(mat)
 condition<- ifelse(as.numeric(sample_names)<=22,"DX","week_4")
 subject<- c(rep(1:11), rep(1:11))
+# Samples 1-11 = DX and 12-22 = week 4, in the same patient order
+stopifnot(length(sample_names) == 22, sum(condition == "DX") == 11)
 coldata<- data.frame(row.names=sample_names, subject=factor(subject),condition=factor(condition))
 counts<- mat
 keep <- rowSums(cpm(counts) > 1) >= 3
@@ -154,16 +179,97 @@ tab_study <- topTable(fit_study, coef = "timepointweek_4", number = Inf)
 tab_89403$ensembl_id <- sub("\\..*", "", rownames(tab_89403))
 tab_study$ensembl_id <- sub("\\..*", "", rownames(tab_study))
 
-mart <- useEnsembl(biomart = "genes", dataset = "hsapiens_gene_ensembl")
-ens_map <- getBM(attributes = c("ensembl_gene_id", "hgnc_symbol"),
-                 filters = "ensembl_gene_id",
-                 values = unique(c(tab_89403$ensembl_id, tab_study$ensembl_id)),
-                 mart = mart)
+# Ensembl -> HGNC symbol mapping with Ensembl BioMart.
+# - The first successful download is cached in data/ensembl_symbol_map_biomart.csv
+#   and reused, so every rerun uses the same symbols.
+#   Delete that file to force a fresh download.
+# - BioMart is tried on the main site and the mirrors, several times each,
+#   because the servers are intermittently unavailable.
+# - Fallback (MAPPING_SOURCE <- "orgdb"): org.Hs.eg.db.
+MAPPING_SOURCE  <- "biomart"
+ENSEMBL_VERSION <- NA     # e.g. 115 to pin a release; NA = current release
+MAX_ROUNDS      <- 5      # rounds through all mirrors before giving up
+all_ens   <- unique(c(tab_89403$ensembl_id, tab_study$ensembl_id))
+map_cache <- "data/ensembl_symbol_map_biomart.csv"   # kept outside output_revised/
+
+fetch_biomart <- function(ids) {
+  mirrors <- if (is.na(ENSEMBL_VERSION)) c("www", "useast", "asia") else "archive"
+  for (round in seq_len(MAX_ROUNDS)) {
+    for (m in mirrors) {
+      res <- tryCatch({
+        mart <- if (m == "archive") {
+          useEnsembl(biomart = "genes", dataset = "hsapiens_gene_ensembl", version = ENSEMBL_VERSION)
+        } else {
+          useEnsembl(biomart = "genes", dataset = "hsapiens_gene_ensembl", mirror = m)
+        }
+        bm  <- getBM(attributes = c("ensembl_gene_id", "hgnc_symbol"),
+                     filters = "ensembl_gene_id", values = ids, mart = mart)
+        rel <- tryCatch({
+          le <- if (m == "archive") listEnsembl(version = ENSEMBL_VERSION) else listEnsembl(mirror = m)
+          le$version[le$biomart == "genes"]
+        }, error = function(e) NA)
+        list(map = bm, release = rel, mirror = m)
+      }, error = function(e) {
+        message(sprintf("BioMart attempt failed (round %d, %s): %s", round, m, conditionMessage(e)))
+        NULL
+      })
+      if (!is.null(res) && nrow(res$map) > 0) return(res)
+      Sys.sleep(5)
+    }
+  }
+  NULL
+}
+
+if (MAPPING_SOURCE == "biomart" && file.exists(map_cache)) {
+  ens_map <- read.csv(map_cache, stringsAsFactors = FALSE)
+  ens_map$hgnc_symbol[is.na(ens_map$hgnc_symbol)] <- ""
+  cat("Gene symbols: cached BioMart map (", map_cache, ")\n", sep = "")
+  if (file.exists(sub("\\.csv$", "_release.txt", map_cache)))
+    cat(readLines(sub("\\.csv$", "_release.txt", map_cache)), sep = "\n")
+  # IDs not in the map (e.g. retired since GENCODE v47) get no symbol and are removed
+  missing_ids <- setdiff(all_ens, ens_map$ensembl_gene_id)
+  cat(sprintf("Ensembl IDs in data: %d | not in BioMart map (no symbol): %d\n", length(all_ens), length(missing_ids)))
+  if (length(missing_ids) > 0)
+    ens_map <- rbind(ens_map[, c("ensembl_gene_id","hgnc_symbol")],
+                     data.frame(ensembl_gene_id = missing_ids, hgnc_symbol = ""))
+} else if (MAPPING_SOURCE == "biomart") {
+  bm <- fetch_biomart(all_ens)
+  if (is.null(bm)) stop("Ensembl BioMart could not be reached on any mirror after ", MAX_ROUNDS,
+                        " rounds. Try again later (or set MAPPING_SOURCE <- \"orgdb\").")
+  ens_map <- bm$map[!duplicated(bm$map$ensembl_gene_id), ]
+  # IDs that BioMart does not return get an empty symbol (removed later)
+  missing_ids <- setdiff(all_ens, ens_map$ensembl_gene_id)
+  if (length(missing_ids) > 0)
+    ens_map <- rbind(ens_map, data.frame(ensembl_gene_id = missing_ids, hgnc_symbol = ""))
+  write.csv(ens_map, map_cache, row.names = FALSE)
+  rel_txt <- sprintf("Gene symbols: Ensembl BioMart (%s, mirror %s), downloaded %s",
+                     ifelse(is.na(bm$release), "release unknown", bm$release), bm$mirror, Sys.Date())
+  writeLines(rel_txt, sub("\\.csv$", "_release.txt", map_cache))
+  cat(rel_txt, "\n")
+} else {
+  sym <- AnnotationDbi::mapIds(org.Hs.eg.db, keys = all_ens, column = "SYMBOL",
+                               keytype = "ENSEMBL", multiVals = "first")
+  ens_map <- data.frame(ensembl_gene_id = all_ens, hgnc_symbol = unname(sym))
+  cat("Gene symbols: org.Hs.eg.db version", as.character(packageVersion("org.Hs.eg.db")), "\n")
+}
+write.csv(ens_map, file.path(out_dir, "ensembl_symbol_map_used.csv"), row.names = FALSE)
 
 tab_89403$hgnc_symbol<- ens_map$hgnc_symbol[match(tab_89403$ensembl_id, ens_map$ensembl_gene_id)]
 tab_study$hgnc_symbol<- ens_map$hgnc_symbol[match(tab_study$ensembl_id, ens_map$ensembl_gene_id)]
-tab_89403<- tab_89403[!is.na(tab_89403$hgnc_symbol) & !duplicated(tab_89403$hgnc_symbol),]
-tab_study<- tab_study[!is.na(tab_study$hgnc_symbol) & !duplicated(tab_study$hgnc_symbol),]
+
+# When several Ensembl IDs map to one symbol, keep the most highly expressed
+# one (AveExpr), then restore the p-value order.
+dedup_symbols <- function(tab) {
+  tab <- tab[!is.na(tab$hgnc_symbol) & tab$hgnc_symbol != "", ]
+  tab <- tab[order(-tab$AveExpr), ]
+  tab <- tab[!duplicated(tab$hgnc_symbol), ]
+  tab[order(tab$P.Value), ]
+}
+cat(sprintf("Duplicate symbols resolved: GSE89403 %d, study cohort %d\n",
+            sum(duplicated(na.omit(tab_89403$hgnc_symbol[tab_89403$hgnc_symbol != ""]))),
+            sum(duplicated(na.omit(tab_study$hgnc_symbol[tab_study$hgnc_symbol != ""])))))
+tab_89403 <- dedup_symbols(tab_89403)
+tab_study <- dedup_symbols(tab_study)
 
 # =============================================================================
 # STOUFFER'S META-ANALYSIS
@@ -199,9 +305,20 @@ res_filt$sig <- ifelse(
   ifelse(res_filt$logFC_meta > 0, "Upregulated", "Downregulated"), "Not significant")
 degs<- res_filt[res_filt$padj<0.05 & abs(res_filt$logFC_meta)>=1 & res_filt$dir_consistent=="Y",]
 
-write.csv(degs, "output/meta/tables/meta_degs.csv", row.names = F, quote=F)
-write.table(tab_89403,"output/meta/tables/gse89403_toptab.tsv", quote = FALSE, sep="\t")
-write.table(tab_study,"output/meta/tables/study_cohort_toptab.tsv", quote=F, sep="\t")
+cat(sprintf("Meta-DEGs: %d (%d up, %d down)\n", nrow(degs),
+            sum(degs$logFC_meta > 0), sum(degs$logFC_meta < 0)))
+
+# Compare with a previous meta-DEG list, if present
+if (file.exists("output/meta/tables/meta_degs.csv")) {
+  old_degs <- read.csv("output/meta/tables/meta_degs.csv")
+  cat("Genes only in new list:", paste(setdiff(degs$hgnc_symbol, old_degs$hgnc_symbol), collapse=", "), "\n")
+  cat("Genes only in old list:", paste(setdiff(old_degs$hgnc_symbol, degs$hgnc_symbol), collapse=", "), "\n")
+}
+
+write.csv(degs, file.path(out_dir, "meta_degs.csv"), row.names = F, quote=F)
+write.csv(res_filt, file.path(out_dir, "meta_all_genes.csv"), row.names = F)
+write.table(tab_89403, file.path(out_dir, "gse89403_toptab.tsv"), quote = FALSE, sep="\t")
+write.table(tab_study, file.path(out_dir, "study_cohort_toptab.tsv"), quote=F, sep="\t")
 
 # =============================================================================
 # FIGURES
@@ -281,8 +398,14 @@ celltype_map <- c(
   TLR5="Monocyte", CASP5="Monocyte",
   C1QA="Monocyte", C1QB="Monocyte", C1QC="Monocyte",
   C2="Monocyte", FCGR1A="Monocyte", MCEMP1="Monocyte",
-  MYO10="Monocyte", PDCD1LG2="Monocyte", CD274="Monocyte",
-  
+  MYO10="Monocyte", PDCD1LG2="Monocyte",
+  # CD274 (PD-L1) and PDCD1LG2 (PD-L2) are expressed at low levels in all resting
+  # HPA immune cells (max nTPM 6.7 and 1.5), so they are assigned from the
+  # literature: PD-L1 is over-expressed by blood neutrophils in active TB
+  # (McNab et al., Eur J Immunol 2011; PMID 21509782). PDCD1LG2 is assigned to
+  # monocytes (intermediate monocytes 1.4 nTPM).
+  CD274="Neutrophil",
+
   AIM2="B cell", HRK="B cell",
   ZDHHC19="B cell", `IGLV7-46`="B cell",
   
@@ -409,6 +532,9 @@ pA_ch <- Heatmap(
 
 pA <- as.ggplot(grid.grabExpr(draw(pA_ch)))
 pA
+# Save Figure 2a
+pdf(file.path(fig_dir, "Fig2a_heatmap.pdf"), width = 10, height = 12); draw(pA_ch); dev.off()
+png(file.path(fig_dir, "Fig2a_heatmap.png"), width = 10, height = 12, units = "in", res = 300); draw(pA_ch); dev.off()
 
 #Volcano Plot
 
@@ -498,25 +624,8 @@ pVol <- ggplot(vol_dat, aes(x = logFC_meta, y = -log10(padj))) +
   )
 
 pVol
-
-## 
-
-# ═════════════════════════════════════════════════════════════════════════════
-# PANEL B — Cross-cohort scatter
-# ═════════════════════════════════════════════════════════════════════════════
-
-# ── scatter_dat for pB ────────────────────────────────────────────────────────
-lfc_89403 <- tab_89403[tab_89403$hgnc_symbol %in% degs$hgnc_symbol,
-                       c("hgnc_symbol", "logFC")]
-colnames(lfc_89403)[2] <- "logFC_89403"
-
-lfc_study <- tab_study[tab_study$hgnc_symbol %in% degs$hgnc_symbol,
-                       c("hgnc_symbol", "logFC")]
-colnames(lfc_study)[2] <- "logFC_study"
-
-scatter_dat <- merge(lfc_89403, lfc_study, by = "hgnc_symbol")
-scatter_dat <- merge(scatter_dat, degs[, c("hgnc_symbol", "sig")], by = "hgnc_symbol")
-r_val       <- round(cor(scatter_dat$logFC_89403, scatter_dat$logFC_study), 3)
+ggsave(file.path(fig_dir, "Fig2b_volcano.pdf"), pVol, width = 7, height = 6.5)
+ggsave(file.path(fig_dir, "Fig2b_volcano.png"), pVol, width = 7, height = 6.5, dpi = 300)
 
 # ── valid_dat for pC ──────────────────────────────────────────────────────────
 affy_clean <- affy[!is.na(affy$hgnc_symbol) & affy$hgnc_symbol != "", ]
@@ -530,54 +639,15 @@ valid_dat$concordant <- sign(valid_dat$logFC_meta) == sign(valid_dat$logFC_affy)
 n_tested       <- nrow(valid_dat)
 n_concordant   <- sum(valid_dat$concordant)
 pct_concordant <- round(100 * n_concordant / n_tested, 1)
-fisher_p       <- fisher.test(
-  matrix(c(n_concordant, n_tested - n_concordant,
-           n_tested - n_concordant, n_concordant), nrow = 2)
-)$p.value
+# Binomial sign test (H0: 50% directional agreement)
+binom_p   <- binom.test(n_concordant, n_tested, p = 0.5)$p.value
 valid_lab <- paste0(n_concordant, "/", n_tested, " concordant (",
-                    pct_concordant, "%)\np = ", signif(fisher_p, 2))
+                    pct_concordant, "%)\nbinomial p = ", signif(binom_p, 2))
+cat("GSE31348 validation:", valid_lab, "\n")
+cat("Meta-DEGs not measured in GSE31348:",
+    paste(setdiff(degs$hgnc_symbol, valid_dat$hgnc_symbol), collapse = ", "), "\n")
 
-pB <- ggplot(scatter_dat,
-             aes(x = logFC_89403, y = logFC_study, fill = sig)) +
-  geom_hline(yintercept = 0, linetype = "dashed", color = "grey70", linewidth = 0.4) +
-  geom_vline(xintercept = 0, linetype = "dashed", color = "grey70", linewidth = 0.4) +
-  geom_smooth(method = "lm", se = TRUE, color = "grey30",
-              fill = "grey88", linewidth = 0.7) +
-  geom_point(shape = 21, size = 3.5, stroke = 0.3,
-             color = "white", alpha = 0.9) +
-  annotate("text", x = Inf, y = -Inf,
-           label = paste0("r = ", r_val),
-           hjust = 1.15, vjust = -1,
-           size = 5, color = "black") +
-  scale_fill_manual(
-    values = c("Upregulated" = COL_UP, "Downregulated" = COL_DOWN),
-    name   = NULL
-  ) +
-  labs(
-    title = "Cross-Cohort Concordance",
-    x     = expression(GSE89403 ~ log[2] ~ FC),
-    y     = expression("Study Cohort" ~ log[2] ~ FC)
-  ) +
-  theme_bw(base_size = 16) +
-  theme(
-    axis.text        = element_text(size = 14, color = "black"),
-    axis.title       = element_text(size = 15),
-    plot.title       = element_text(size = 16, hjust = 0.5),
-    panel.grid.major = element_line(color = "grey88", linewidth = 0.3),
-    panel.grid.minor = element_blank(),
-    panel.border     = element_rect(color = "black", fill = NA, linewidth = 0.8),
-    legend.position  = "top",
-    legend.text      = element_text(size = 13),
-    legend.key.size  = unit(0.5, "cm"),
-    plot.margin      = margin(10, 20, 10, 20),
-    aspect.ratio     = 1
-  ) +
-  guides(fill = guide_legend(override.aes = list(shape = 21, size = 4), nrow = 1))
-
-pB
-
-
-## Panel C
+## Figure 2c: GSE31348 validation
 pC <- ggplot(valid_dat,
              aes(x = logFC_meta, y = logFC_affy)) +
   geom_hline(yintercept = 0, linetype = "dashed", color = "grey70", linewidth = 0.4) +
@@ -620,3 +690,26 @@ pC <- ggplot(valid_dat,
   )
 
 pC
+ggsave(file.path(fig_dir, "Fig2c_GSE31348_validation.pdf"), pC, width = 6.5, height = 6.5)
+ggsave(file.path(fig_dir, "Fig2c_GSE31348_validation.png"), pC, width = 6.5, height = 6.5, dpi = 300)
+write.csv(valid_dat, file.path(out_dir, "GSE31348_validation_signs.csv"), row.names = FALSE)
+
+# =============================================================================
+# SUPPLEMENTARY TABLE S1
+# =============================================================================
+st1_89403 <- tab_89403[, c("hgnc_symbol", "logFC", "adj.P.Val")]
+colnames(st1_89403)[2:3] <- c("log2FC_GSE89403", "FDR_GSE89403")
+st1_study <- tab_study[, c("hgnc_symbol", "logFC", "adj.P.Val")]
+colnames(st1_study)[2:3] <- c("log2FC_study_cohort", "FDR_study_cohort")
+
+supp_t1 <- degs[, c("hgnc_symbol", "sig", "logFC_meta", "padj", "pval_meta",
+                    "combined_z", "n_studies", "dir_consistent")]
+supp_t1 <- merge(supp_t1, st1_89403, by = "hgnc_symbol")
+supp_t1 <- merge(supp_t1, st1_study, by = "hgnc_symbol")
+supp_t1$HPA_cell_type <- unname(celltype_map[supp_t1$hgnc_symbol])
+supp_t1$HPA_cell_type[is.na(supp_t1$HPA_cell_type)] <- "Other"
+colnames(supp_t1)[1:8] <- c("gene_symbol", "direction", "log2FC_meta", "FDR_meta",
+                            "p_meta", "stouffer_Z", "n_studies", "direction_concordant")
+supp_t1 <- supp_t1[order(supp_t1$FDR_meta), ]
+stopifnot(nrow(supp_t1) == nrow(degs))
+write.csv(supp_t1, file.path(out_dir, "SuppTable1_meta_DEGs.csv"), row.names = FALSE)

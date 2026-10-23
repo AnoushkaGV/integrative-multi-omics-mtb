@@ -1,0 +1,36 @@
+# Data: only small reference/annotation files are tracked; raw and cohort data
+# are available from GEO/SRA (see README)
+data/*
+!data/rna_immune_cell.tsv
+!data/ensembl_symbol_map_biomart.csv
+!data/ensembl_symbol_map_biomart_release.txt
+!data/mrna/
+data/mrna/*
+!data/mrna/gse89403/
+data/mrna/gse89403/*
+!data/mrna/gse89403/cibersort/
+
+metadata/
+output/
+output_revised/
+
+# Raw bioinformatics files
+*.CEL
+*.CEL.gz
+*_counts.txt
+*.bam
+*.bai
+*.fastq
+*.fastq.gz
+*.fq.gz
+*.tRFs.report.tsv
+
+# R
+.Rhistory
+.RData
+.Rproj.user/
+*.Rproj
+
+# macOS / editor
+.DS_Store
+*.swp

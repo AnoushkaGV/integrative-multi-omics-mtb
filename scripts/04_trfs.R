@@ -1,11 +1,23 @@
+# =============================================================================
+# tRF analysis (Figure 5, Supplementary Table S4)
+# Paired DESeq2 with apeglm shrinkage, read-length and biogenesis summaries,
+# anticodon-level fold changes and 7-mer seed matching to meta-DEG 3' UTRs.
+# Run meta_final.R first.
+# =============================================================================
 library(DESeq2); library(ggplot2); library(dplyr)
 library(ComplexHeatmap); library(circlize)
 library(patchwork); library(Biostrings)
 library(TxDb.Hsapiens.UCSC.hg38.knownGene); library(org.Hs.eg.db)
 library(BSgenome.Hsapiens.UCSC.hg38); library(tidyr)
+library(ggrepel)
 
 theme_set(theme_classic(base_size = 13, base_family = "Helvetica"))
-
+out_dir <- "output_revised/trf/tables";  dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
+fig_dir <- "output_revised/trf/figures"; dir.create(fig_dir, recursive = TRUE, showWarnings = FALSE)
+save_plot <- function(p, name, w, h) {
+  ggsave(file.path(fig_dir, paste0(name, ".pdf")), p, width = w, height = h)
+  ggsave(file.path(fig_dir, paste0(name, ".png")), p, width = w, height = h, dpi = 300)
+}
 
 # ── Colors ────────────────────────────────────────────────────────────────────
 COL_BASELINE <- "#D4A96A"; COL_WEEK4 <- "tomato3"
@@ -28,6 +40,9 @@ keep <- rowSums(counts(dds) >= 10) >= 11
 dds  <- dds[keep, ]
 dds  <- DESeq(dds)
 res  <- results(dds, name="condition_treatment_vs_baseline")
+res_shr <- lfcShrink(dds, coef="condition_treatment_vs_baseline", type="apeglm")
+res_shr$padj <- res$padj
+res <- res_shr
 res_df   <- as.data.frame(res[complete.cases(res) & res$baseMean > 50, ])
 DEGs_n11 <- res_df[abs(res_df$log2FoldChange) > 0.58 & res_df$padj < 0.05, ]
 
@@ -60,16 +75,18 @@ aa_palette      <- setNames(
 clean_row_names <- clean_name(results_df$tRF)
 
 # ── Cluster mapping ───────────────────────────────────────────────────────────
+type_map <- c("tRF-3"="3'-tRF","tRF-5"="5'-tRF","i-tRF"="i-tRF",
+              "3' Half"="3'-half","5' Half"="5'-half","tRF-1"="tRF-1")
 de_trf_clusters <- trfs |>
   filter(entity_name %in% results_df$tRF) |>
-  dplyr::select(entity_name, clusters)
-
+  dplyr::select(entity_name, clusters, trf_type)
 de_trf_expanded <- de_trf_clusters |>
   rowwise() |>
   mutate(tRNA_name = list(strsplit(clusters, ",")[[1]])) |>
   unnest(tRNA_name) |>
-  mutate(tRNA_name = trimws(tRNA_name),
-         tRNA_name = sub("_Cluster_.*", "", tRNA_name))
+  mutate(tRNA_name = sub("_Cluster_.*", "", trimws(tRNA_name)),
+         report_type = unname(type_map[trf_type])) |>
+  distinct(entity_name, tRNA_name, report_type)
 
 # ── Merge reports ─────────────────────────────────────────────────────────────
 report_files <- list.files("data/trfs", pattern="\\.tRFs\\.report\\.tsv$", full.names=TRUE)
@@ -87,6 +104,7 @@ report_all <- report_all |>
 # ── tRF sequences ─────────────────────────────────────────────────────────────
 trf_seqs <- report_all |>
   inner_join(de_trf_expanded, by = "tRNA_name") |>
+  filter(tRF_type == report_type) |>
   group_by(entity_name) |>
   slice_max(read_count, n = 1, with_ties = FALSE) |>
   dplyr::select(entity_name, tRF_seq, tRF_type, tRNA_name)
@@ -94,12 +112,13 @@ trf_seqs <- report_all |>
 # ── Length summary ────────────────────────────────────────────────────────────
 length_summary <- report_all |>
   inner_join(de_trf_expanded, by = "tRNA_name") |>
+  filter(tRF_type == report_type) |>
   mutate(length = nchar(tRF_seq)) |>
   group_by(entity_name, length) |>
   summarise(total_reads = sum(read_count), .groups = "drop") |>
   left_join(results_df |> dplyr::select(tRF, log2FoldChange),
             by = c("entity_name" = "tRF")) |>
-  mutate(AminoAcid    = sub("_Comb.*", "", entity_name),
+  mutate(AminoAcid    = gsub("_", " ", sub("_Comb.*", "", entity_name)),
          entity_label = clean_name(entity_name))
 
 # ── Biogenesis count ──────────────────────────────────────────────────────────
@@ -109,7 +128,7 @@ bio_count <- data.frame(trf_type = results_df$trf_type) |>
          label = paste0(trf_type, "\nn=", n))
 
 # ── 7-mer seed matching ───────────────────────────────────────────────────────
-meta_degs <- read.csv("output/meta/tables/meta_degs.csv")
+meta_degs <- read.csv("output_revised/meta/tables/meta_degs.csv")
 txdb <- TxDb.Hsapiens.UCSC.hg38.knownGene
 utrs <- threeUTRsByTranscript(txdb, use.names = TRUE)
 
@@ -147,9 +166,10 @@ seed_match_df <- bind_rows(seed_matches) |>
 # ── Anticodon fold change ─────────────────────────────────────────────────────
 codon_reads <- report_all |>
   inner_join(de_trf_expanded, by = "tRNA_name") |>
+  filter(tRF_type == report_type) |>
   mutate(anticodon = sub(".*tRNA-[A-Za-z]+-([A-Z]+)-.*", "\\1", tRNA_name)) |>
   group_by(entity_name, anticodon, Timepoint) |>
-  summarise(total_reads = sum(read_count), .groups = "drop")
+  summarise(total_reads = sum(rp100k), .groups = "drop")
 
 codon_totals <- codon_reads |>
   group_by(entity_name, anticodon) |>
@@ -176,6 +196,27 @@ codon_fc_complete <- all_combos |>
   left_join(codon_fc |> dplyr::select(entity_label, anticodon, log2FC),
             by = c("entity_label", "anticodon"))
 
+dominant_anticodon <- codon_reads |>
+  group_by(entity_name, anticodon) |>
+  summarise(ac_total = sum(total_reads), .groups = "drop") |>
+  group_by(entity_name) |>
+  slice_max(ac_total, n = 1, with_ties = FALSE) |>
+  ungroup() |>
+  dplyr::select(entity_name, dominant_anticodon = anticodon)
+
+anticodon_pct_tp <- codon_reads |>
+  inner_join(codon_totals |> dplyr::select(entity_name, anticodon),
+             by = c("entity_name", "anticodon")) |>
+  group_by(entity_name, Timepoint) |>
+  mutate(pct = 100 * total_reads / sum(total_reads)) |>
+  ungroup() |>
+  mutate(entity_label = clean_name(entity_name))
+
+res_df_plot <- res_df
+res_df_plot$sig <- ifelse(res_df_plot$padj < 0.05 & res_df_plot$log2FoldChange > 0.58, "Up",
+                          ifelse(res_df_plot$padj < 0.05 & res_df_plot$log2FoldChange < -0.58, "Down", "NS"))
+res_df_plot$label <- ifelse(res_df_plot$sig != "NS", gsub("_", " ", rownames(res_df_plot)), NA)
+
 # ════════════════════════════════════════════════════════════════════════════
 # PLOTS
 # ════════════════════════════════════════════════════════════════════════════
@@ -188,8 +229,6 @@ mat_scaled <- t(scale(t(mat_plot)))
 col_fun    <- colorRamp2(c(-2, 0, 2), c(COL_DOWN, "white", COL_UP))
 ht_opt(TITLE_PADDING = unit(3, "mm"))
 aa_labels <- gsub("_", " ", sub("_Comb.*", "", results_df$tRF))
-
-
 
 ht <- Heatmap(mat_scaled,
               col = col_fun,
@@ -223,6 +262,8 @@ ht <- Heatmap(mat_scaled,
 
 pA <- grid.grabExpr(draw(ht, merge_legend = TRUE))
 grid.newpage(); grid.draw(pA)
+pdf(file.path(fig_dir, "Fig5a_heatmap.pdf"), width = 9, height = 5); draw(ht, merge_legend = TRUE); dev.off()
+png(file.path(fig_dir, "Fig5a_heatmap.png"), width = 9, height = 5, units = "in", res = 300); draw(ht, merge_legend = TRUE); dev.off()
 
 # ── Panel B: Length lollipop ──────────────────────────────────────────────────
 pB <- ggplot(length_summary, aes(x = length, y = total_reads, color = AminoAcid)) +
@@ -231,10 +272,10 @@ pB <- ggplot(length_summary, aes(x = length, y = total_reads, color = AminoAcid)
   facet_wrap(~ entity_label, ncol = 2, scales = "free") +
   scale_color_manual(values = aa_palette) +
   scale_y_continuous(
-    labels = function(x) ifelse(x >= 1000, paste0(round(x/1000,0),"K"), as.character(x)),
+    labels = function(x) ifelse(x >= 1000, paste0(x/1000, "K"), as.character(x)),
     expand = expansion(mult = c(0, 0.1))
   ) +
-  scale_x_continuous(breaks = scales::pretty_breaks(n = 3)) +
+  scale_x_continuous(breaks = function(l) unique(round(scales::pretty_breaks(n = 4)(l)))) +
   labs(x = "tRF length (nt)", y = "Read count") +
   theme_classic(base_size = 13) +
   theme(strip.background = element_blank(),
@@ -244,6 +285,7 @@ pB <- ggplot(length_summary, aes(x = length, y = total_reads, color = AminoAcid)
         panel.spacing    = unit(1, "lines"),
         legend.position  = "none")
 print(pB)
+save_plot(pB, "Fig5d_read_lengths", 8, 9)
 
 # ── Panel C: Biogenesis donut ─────────────────────────────────────────────────
 pC <- ggplot(bio_count, aes(x = 2, y = n, fill = trf_type)) +
@@ -254,6 +296,7 @@ pC <- ggplot(bio_count, aes(x = 2, y = n, fill = trf_type)) +
   theme_void(base_size = 13) +
   theme(legend.position = "none")
 print(pC)
+save_plot(pC, "Fig5c_biogenesis", 4, 4)
 
 # ── Panel D: Seed match dotplot ───────────────────────────────────────────────
 seed_plot_df <- seed_match_df |>
@@ -266,7 +309,7 @@ pD <- ggplot(seed_plot_df, aes(x = tRF_label, y = gene_label,
   geom_point(alpha = 0.8) +
   scale_color_manual(values = aa_palette) +
   scale_size_continuous(range = c(2,8), breaks = c(1.0,1.2,1.4,1.6), limits = c(1.0,1.7)) +
-  labs(y = "Meta-DEGs", color = "Amino acid",
+  labs(x = NULL, y = "Meta-DEGs", color = "Amino acid",
        size  = expression("|log"[2]*"FC|"),
        title = "7-mer seed matches to Meta-DEG 3\u2019UTRs") +
   theme_classic(base_size = 13) +
@@ -278,6 +321,7 @@ pD <- ggplot(seed_plot_df, aes(x = tRF_label, y = gene_label,
         legend.title     = element_text(size=12),
         legend.text      = element_text(size=11))
 print(pD)
+save_plot(pD, "Fig5f_seed_matches", 7, 7)
 
 # ── Supplementary: Anticodon heatmap ─────────────────────────────────────────
 pSupp <- ggplot(codon_fc_complete, aes(x = anticodon, y = entity_label, fill = log2FC)) +
@@ -298,9 +342,9 @@ pSupp <- ggplot(codon_fc_complete, aes(x = anticodon, y = entity_label, fill = l
         legend.title = element_text(),
         panel.grid   = element_blank())
 print(pSupp)
+save_plot(pSupp, "Fig5e_anticodon_log2FC", 7, 6)
 
-###
-ggplot(anticodon_pct_tp, aes(x = anticodon, y = entity_label,
+pPct <- ggplot(anticodon_pct_tp, aes(x = anticodon, y = entity_label,
                              size = pct, color = Timepoint)) +
   geom_point(alpha = 0.8, position = position_dodge(width = 0.5)) +
   scale_color_manual(values = c(Baseline = COL_BASELINE, Treatment = COL_WEEK4)) +
@@ -317,6 +361,8 @@ ggplot(anticodon_pct_tp, aes(x = anticodon, y = entity_label,
     legend.title = element_text(),
     panel.grid.major = element_line(color = "grey92", linewidth = 0.3)
   )
+print(pPct)
+save_plot(pPct, "SuppFig_anticodon_pct", 8, 6)
 
 pVolc <- ggplot(res_df_plot, aes(x = log2FoldChange, y = -log10(padj))) +
   geom_point(shape = 1, size = 1.8, color = "grey60", stroke = 0.4) +
@@ -337,19 +383,21 @@ pVolc <- ggplot(res_df_plot, aes(x = log2FoldChange, y = -log10(padj))) +
         panel.background = element_rect(fill = "white"))
 
 print(pVolc)
+save_plot(pVolc, "Fig5b_volcano", 6, 5)
 
-###
 
 # ── Write tables ──────────────────────────────────────────────────────────────
 trf_de_table <- merge(data.frame(tRF=rownames(DEGs_n11), DEGs_n11),
                       entity_map_clean[, c("entity_name","trf_type","is_mito")],
                       by.x="tRF", by.y="entity_name", all.x=TRUE)
 trf_de_table <- trf_de_table[order(trf_de_table$padj), ]
-write.csv(trf_de_table, "output/trf/tables/trf_de_results.csv", row.names=FALSE)
+write.csv(trf_de_table, file.path(out_dir, "trf_de_results.csv"), row.names=FALSE)
 
-write.csv(seed_match_df, "output/trf/tables/trf_seed_matches.csv", row.names=FALSE)
+write.csv(seed_match_df, file.path(out_dir, "trf_seed_matches.csv"), row.names=FALSE)
 
-write.csv(trf_seqs, "output/trf/tables/trf_sequences.csv", row.names=FALSE)
+write.csv(trf_seqs, file.path(out_dir, "trf_sequences.csv"), row.names=FALSE)
+
+write.csv(codon_fc, file.path(out_dir, "trf_anticodon_log2fc.csv"), row.names=FALSE)
 
 anticodon_bar <- codon_reads |>
   group_by(entity_name, anticodon) |>
@@ -375,7 +423,7 @@ pAnticodon <- ggplot(anticodon_bar,
     labels = function(x) ifelse(x >= 1000, paste0(round(x/1000, 0), "K"), x),
     expand = expansion(mult = c(0, 0.1))
   ) +
-  labs(x = "Anticodon", y = "Read count", fill = "Timepoint") +
+  labs(x = "Anticodon", y = "Reads (RP100K)", fill = "Timepoint") +
   theme_classic(base_size = 13, base_family = "Helvetica") +
   theme(
     strip.background = element_blank(),
@@ -390,3 +438,4 @@ pAnticodon <- ggplot(anticodon_bar,
   )
 
 print(pAnticodon)
+save_plot(pAnticodon, "SuppFig_anticodon_reads", 8, 9)

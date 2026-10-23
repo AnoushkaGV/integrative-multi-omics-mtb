@@ -1,12 +1,27 @@
+# =============================================================================
+# Immune deconvolution of GSE89403 (Figure 2d, Supplementary Table S8)
+# CIBERSORTx (LM22) fractions and MCP-counter scores; paired Wilcoxon tests
+# between baseline and week 4 with Benjamini-Hochberg correction.
+# =============================================================================
 library(ggplot2)
 library(patchwork)
 library(MCPcounter)
 
+out_dir <- "output_revised/deconvolution/tables"
+dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
+fig_dir <- "output_revised/deconvolution/figures"
+dir.create(fig_dir, recursive = TRUE, showWarnings = FALSE)
+
 COL_BASELINE <- "#D4A96A"
 COL_WEEK4    <- "tomato3"
 
-cib_gse  <- read.csv("data/mrna/gse89403/cibersort/CIBERSORTx_GSE89403_results.csv", check.names=FALSE)
-tpm_gse2 <- read.delim("data/mrna/gse89403/cibersort/cibersortx_GSE89403_input.tsv", check.names=FALSE)
+cib_gse  <- read.csv("data/mrna/gse89403/cibersort/CIBERSORTx_Job8_Results.csv", check.names=FALSE)
+tpm_gse2 <- read.delim("data/mrna/gse89403/cibersort/cibersortx_input_final.tsv", check.names=FALSE)
+
+# Keep samples with CIBERSORTx p < 0.05
+cat(sprintf("CIBERSORTx samples with p < 0.05: %d of %d\n",
+            sum(cib_gse$`P-value` < 0.05), nrow(cib_gse)))
+cib_gse <- cib_gse[cib_gse$`P-value` < 0.05, ]
 
 cib_gse$Timepoint <- ifelse(grepl("DX", cib_gse$Mixture), "Baseline", "Week4")
 cib_gse$PairID    <- sub("_(DX|week_4)$", "", cib_gse$Mixture)
@@ -179,12 +194,16 @@ p_mcp_gse <- make_mcp_plot(mcp_gse_df, "MCP-counter: GSE89403 (n=86 pairs)")
 
 print(p_cib_gse)
 print(p_mcp_gse)
+# Save figure panels
+ggsave(file.path(fig_dir, "Fig2e_cibersortx.pdf"), p_cib_gse, width = 10, height = 6)
+ggsave(file.path(fig_dir, "Fig2e_cibersortx.png"), p_cib_gse, width = 10, height = 6, dpi = 300)
+ggsave(file.path(fig_dir, "Fig2e_mcpcounter.pdf"), p_mcp_gse, width = 8, height = 6)
+ggsave(file.path(fig_dir, "Fig2e_mcpcounter.png"), p_mcp_gse, width = 8, height = 6, dpi = 300)
 
-## p values
-# CIBERSORTx p-values
+# CIBERSORTx p values
 print(stats_gse[, c("CellType", "p", "fdr")])
 
-# MCP-counter p-values
+# MCP-counter p values
 cell_cols <- names(mcp_labels)
 mcp_stats <- do.call(rbind, lapply(cell_cols, function(ct) {
   b <- mcp_gse_df[mcp_gse_df$Timepoint=="Baseline",]
@@ -194,3 +213,15 @@ mcp_stats <- do.call(rbind, lapply(cell_cols, function(ct) {
 }))
 mcp_stats$fdr <- p.adjust(mcp_stats$p, method="BH")
 print(mcp_stats)
+
+# Save results for all cell types
+cat(sprintf("Pairs analysed: CIBERSORTx %d | MCP-counter %d\n",
+            length(unique(cib_gse_paired$PairID)), length(unique(mcp_gse_df$PairID))))
+write.csv(data.frame(Method = "CIBERSORTx", stats_gse[, c("CellType","mean_bl","mean_wk4","p","fdr")]),
+          file.path(out_dir, "SuppTable_cibersortx_paired_wilcoxon.csv"), row.names = FALSE)
+mcp_means <- do.call(rbind, lapply(mcp_stats$CellType, function(ct) data.frame(
+  CellType = ct,
+  mean_bl  = mean(mcp_gse_df[mcp_gse_df$Timepoint=="Baseline", ct]),
+  mean_wk4 = mean(mcp_gse_df[mcp_gse_df$Timepoint=="Week4",    ct]))))
+write.csv(data.frame(Method = "MCP-counter", merge(mcp_means, mcp_stats, by = "CellType")),
+          file.path(out_dir, "SuppTable_mcpcounter_paired_wilcoxon.csv"), row.names = FALSE)
